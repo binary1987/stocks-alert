@@ -5,9 +5,11 @@ import json
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-BASE_URL = "https://api.twelvedata.com/time_series"
+TWELVEDATA_URL = "https://api.twelvedata.com/time_series"
+FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
+FRED_SERIES_ID = "DTWEXBGS"  # Nominal Broad U.S. Dollar Index (proxy de fuerza del dolar, no es el DXY exacto)
 
 RSI_OVERBOUGHT = 75
 RSI_OVERSOLD = 25
@@ -15,21 +17,60 @@ RSI_OVERSOLD = 25
 STATE_FILE = "dxy_btc_alerted.json"
 
 
-def get_series(symbol, interval, outputsize, retries=3, retry_delay=10):
+def get_usd_index_series(days_back=730, retries=3, retry_delay=10):
     """
-    Pide el historico de un simbolo (DXY o BTC/USD) a Twelve Data.
+    Pide el historico del indice de fuerza del dolar de la Fed (FRED,
+    serie DTWEXBGS) de los ultimos 'days_back' dias naturales. Solo
+    publica en dias habiles, y los valores faltantes vienen marcados
+    como "." en vez de venir ausentes, hay que filtrarlos.
+    Devuelve una lista de (fecha_str, valor) en orden cronologico.
+    """
+    api_key = os.environ.get("FRED_API_KEY")
+    start_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    params = urllib.parse.urlencode({
+        "series_id": FRED_SERIES_ID,
+        "api_key": api_key,
+        "file_type": "json",
+        "observation_start": start_date,
+        "sort_order": "asc",
+    })
+    url = f"{FRED_URL}?{params}"
+
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                data = json.loads(r.read().decode())
+            result = []
+            for obs in data["observations"]:
+                if obs["value"] == ".":
+                    continue  # dato faltante ese dia, se salta
+                result.append((obs["date"], float(obs["value"])))
+            return result
+        except Exception as e:
+            last_error = e
+            print(f"Aviso: fallo al pedir indice del dolar de FRED (intento {attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+
+    raise last_error
+
+
+def get_btc_series(interval="1day", outputsize=730, retries=3, retry_delay=10):
+    """
+    Pide el historico de BTC/USD a Twelve Data.
     Devuelve una lista de (fecha_str, close) en orden cronologico.
-    Reintenta ante fallos de red/timeout.
     """
     api_key = os.environ.get("TWELVEDATA_API_KEY")
     params = urllib.parse.urlencode({
-        "symbol": symbol,
+        "symbol": "BTC/USD",
         "interval": interval,
         "outputsize": outputsize,
         "order": "ASC",
         "apikey": api_key,
     })
-    url = f"{BASE_URL}?{params}"
+    url = f"{TWELVEDATA_URL}?{params}"
 
     last_error = None
     for attempt in range(1, retries + 1):
@@ -38,32 +79,33 @@ def get_series(symbol, interval, outputsize, retries=3, retry_delay=10):
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode())
             if "values" not in data:
-                raise ValueError(f"respuesta sin 'values' para {symbol}: {data}")
+                raise ValueError(f"respuesta sin 'values': {data}")
             result = []
             for v in data["values"]:
-                date_str = v["datetime"][:10]  # solo la parte de fecha, sin hora
+                date_str = v["datetime"][:10]
                 result.append((date_str, float(v["close"])))
             return result
         except Exception as e:
             last_error = e
-            print(f"Aviso: fallo al pedir {symbol} (intento {attempt}/{retries}): {e}")
+            print(f"Aviso: fallo al pedir BTC/USD (intento {attempt}/{retries}): {e}")
             if attempt < retries:
                 time.sleep(retry_delay)
 
     raise last_error
 
 
-def align_ratio(dxy_series, btc_series):
+def align_ratio(usd_index_series, btc_series):
     """
-    Empareja ambas series por fecha (DXY no cotiza fines de semana, BTC si,
-    asi que solo se queda con las fechas presentes en ambas) y calcula el
-    ratio DXY/BTC para cada fecha comun, en orden cronologico.
+    Empareja ambas series por fecha (el indice del dolar solo tiene dato
+    en dias habiles, BTC cotiza todos los dias, asi que solo se queda con
+    las fechas presentes en ambas) y calcula el ratio indice/BTC para
+    cada fecha comun, en orden cronologico.
     """
     btc_by_date = dict(btc_series)
     ratio = []
-    for date_str, dxy_close in dxy_series:
+    for date_str, usd_value in usd_index_series:
         if date_str in btc_by_date:
-            ratio.append((date_str, dxy_close / btc_by_date[date_str]))
+            ratio.append((date_str, usd_value / btc_by_date[date_str]))
     return ratio
 
 
@@ -231,15 +273,15 @@ def send_telegram(msg):
 
 def build_message(action_color, description):
     """
-    Logica invertida orientada a BTC: si el ratio DXY/BTC esta en
-    sobrecompra o a punto de girar a la baja (divergencia bajista), es
-    porque BTC lo esta haciendo mal frente al dolar -> señal alcista para
-    BTC en cuanto revierta = POSIBLE COMPRA. Si esta en sobreventa o a
-    punto de girar al alza, BTC ya lo ha hecho muy bien frente al dolar y
-    esta maduro para corregir -> POSIBLE VENTA.
+    Logica invertida orientada a BTC: si el ratio (indice del dolar / BTC)
+    esta en sobrecompra o a punto de girar a la baja (divergencia
+    bajista), es porque BTC lo esta haciendo mal frente al dolar ->
+    señal alcista para BTC en cuanto revierta = POSIBLE COMPRA. Si esta
+    en sobreventa o a punto de girar al alza, BTC ya lo ha hecho muy bien
+    frente al dolar y esta maduro para corregir -> POSIBLE VENTA.
     """
     label = "POSIBLE SEÑAL DE COMPRA BTC" if action_color == "🟢" else "POSIBLE SEÑAL DE VENTA BTC"
-    return f"{action_color} {label}\nDXY / BTCUSD\n{description}"
+    return f"{action_color} {label}\nÍndice USD (FRED) / BTCUSD\n{description}"
 
 
 def process_signal(daily_values, weekly_values, state, sent):
@@ -313,22 +355,16 @@ def process_signal(daily_values, weekly_values, state, sent):
 
 
 def main():
-    dxy_daily = get_series("DXY", "1day", 365)
-    time.sleep(65)  # margen prudente entre llamadas
-    btc_daily = get_series("BTC/USD", "1day", 365)
-    time.sleep(65)
-    dxy_weekly = get_series("DXY", "1week", 260)
-    time.sleep(65)
-    btc_weekly = get_series("BTC/USD", "1week", 260)
+    usd_index_daily = get_usd_index_series(days_back=730)
+    btc_daily = get_btc_series(interval="1day", outputsize=730)
 
-    daily_history = align_ratio(dxy_daily, btc_daily)
-    weekly_history = align_ratio(dxy_weekly, btc_weekly)
+    daily_history = align_ratio(usd_index_daily, btc_daily)
 
     daily_values = [v for _, v in daily_history]
-    weekly_values = [v for _, v in weekly_history]
+    weekly_values = weekly_from_daily(daily_history)
 
     if daily_history:
-        print(f"Ratio DXY/BTC hoy ({daily_history[-1][0]}): {daily_history[-1][1]:.8f}")
+        print(f"Ratio Índice USD/BTC hoy ({daily_history[-1][0]}): {daily_history[-1][1]:.8f}")
     print(f"Histórico disponible: {len(daily_values)} días / {len(weekly_values)} semanas")
 
     state = load_state()

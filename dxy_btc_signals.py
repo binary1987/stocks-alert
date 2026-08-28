@@ -281,7 +281,7 @@ def build_message(action_color, description):
     frente al dolar y esta maduro para corregir -> POSIBLE VENTA.
     """
     label = "POSIBLE SEÑAL DE COMPRA BTC" if action_color == "🟢" else "POSIBLE SEÑAL DE VENTA BTC"
-    return f"{action_color} {label}\nÍndice USD (FRED) / BTCUSD\n{description}"
+    return f"{action_color} {label}\nDXY / BTCUSD\n{description}"
 
 
 def process_signal(daily_values, weekly_values, state, sent):

@@ -13,9 +13,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Run mag7_signals
+      - name: Run stocks_signals
         env:
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
           TELEGRAM_BOT_TOKEN_MAG7: ${{ secrets.TELEGRAM_BOT_TOKEN_MAG7 }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python mag7_signals.py
+        run: python stocks_signals.py

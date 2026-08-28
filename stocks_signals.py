@@ -14,6 +14,23 @@ SYMBOLS = [
     "MSTR", "BMNR", "ORCL", "LLY", "COIN", "CRCL",
 ]
 
+SYMBOL_NAMES = {
+    "AAPL": "Apple Inc.",
+    "MSFT": "Microsoft Corp.",
+    "GOOGL": "Alphabet Inc.",
+    "AMZN": "Amazon.com Inc.",
+    "NVDA": "NVIDIA Corp.",
+    "META": "Meta Platforms Inc.",
+    "TSLA": "Tesla Inc.",
+    "AVGO": "Broadcom Inc.",
+    "MSTR": "Strategy Inc.",
+    "BMNR": "BitMine Immersion Technologies Inc.",
+    "ORCL": "Oracle Corp.",
+    "LLY": "Eli Lilly and Company",
+    "COIN": "Coinbase Global Inc.",
+    "CRCL": "Circle Internet Group Inc.",
+}
+
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 
@@ -230,6 +247,13 @@ def send_telegram(msg):
     urllib.request.urlopen(url, data=data, timeout=10)
 
 
+def build_signal_message(color, symbol, description):
+    """Formato profesional: SEÑAL DE COMPRA/VENTA + nombre completo + ticker."""
+    label = "SEÑAL DE COMPRA" if color == "🟢" else "SEÑAL DE VENTA"
+    name = SYMBOL_NAMES.get(symbol, symbol)
+    return f"{color} {label}\n{name} ({symbol})\n{description}"
+
+
 MAX_SYMBOLS_PER_CALL = 8  # limite de creditos/minuto de Twelve Data (plan gratuito)
 
 
@@ -286,7 +310,8 @@ def main():
         if label_daily:
             key = f"{symbol}:rsi_daily"
             if key not in sent:
-                msg = f"🔔{color_daily} {symbol} — {label_daily}\nRSI diario: {rsi_daily:.0f}"
+                desc = f"RSI diario en {label_daily} ({rsi_daily:.0f})"
+                msg = build_signal_message(color_daily, symbol, desc)
                 print(msg)
                 send_telegram(msg)
                 sent.add(key)
@@ -296,7 +321,8 @@ def main():
         if label_weekly:
             key = f"{symbol}:rsi_weekly"
             if key not in sent:
-                msg = f"🔔{color_weekly} {symbol} — {label_weekly}\nRSI semanal: {rsi_weekly:.0f}"
+                desc = f"RSI semanal en {label_weekly} ({rsi_weekly:.0f})"
+                msg = build_signal_message(color_weekly, symbol, desc)
                 print(msg)
                 send_telegram(msg)
                 sent.add(key)
@@ -307,7 +333,8 @@ def main():
         if div_daily:
             if divergence_key_changed(state, div_daily_key, div_daily_price):
                 color = "🟢" if div_daily == "alcista" else "🔴"
-                msg = f"🔔{color} {symbol} — divergencia {div_daily} (diario)"
+                desc = f"Divergencia {div_daily} en diario"
+                msg = build_signal_message(color, symbol, desc)
                 print(msg)
                 send_telegram(msg)
                 state["div_state"][div_daily_key] = div_daily_price
@@ -320,7 +347,8 @@ def main():
         if div_weekly:
             if divergence_key_changed(state, div_weekly_key, div_weekly_price):
                 color = "🟢" if div_weekly == "alcista" else "🔴"
-                msg = f"🔔{color} {symbol} — divergencia {div_weekly} (semanal)"
+                desc = f"Divergencia {div_weekly} en semanal"
+                msg = build_signal_message(color, symbol, desc)
                 print(msg)
                 send_telegram(msg)
                 state["div_state"][div_weekly_key] = div_weekly_price

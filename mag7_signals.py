@@ -8,7 +8,7 @@ import urllib.parse
 
 BASE_URL = "https://api.twelvedata.com/time_series"
 
-SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO"]
 
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
@@ -169,8 +169,8 @@ def main():
     daily_data = get_batch(SYMBOLS, interval="1day", outputsize=365)
 
     # Pausa para no pasarnos del limite de 8 creditos/minuto de Twelve Data:
-    # el lote diario ya gasto 7 creditos, esperamos a que "resetee" el minuto
-    # antes de pedir el lote semanal (otros 7 creditos).
+    # el lote diario ya gasto creditos, esperamos a que "resetee" el minuto
+    # antes de pedir el lote semanal (otros creditos).
     time.sleep(65)
 
     weekly_data = get_batch(SYMBOLS, interval="1week", outputsize=260)

@@ -89,11 +89,15 @@ def chunk_list(items, size):
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
-def get_batch(symbols, interval, outputsize):
+def get_batch(symbols, interval, outputsize, retries=3, retry_delay=10):
     """
     Pide precios de varios simbolos a la vez (batch). Ojo: en Twelve Data
     cada simbolo consume 1 credito, un batch de 7 simbolos = 7 creditos,
     no 1. Devuelve un dict {symbol: [closes_ascendente]}.
+
+    Reintenta automaticamente ante fallos de red/timeout (hasta 'retries'
+    veces, con 'retry_delay' segundos de espera entre intentos), ya que
+    Twelve Data puede tener timeouts puntuales sin que sea un problema real.
     """
     api_key = os.environ.get("TWELVEDATA_API_KEY")
     params = urllib.parse.urlencode({
@@ -104,9 +108,22 @@ def get_batch(symbols, interval, outputsize):
         "apikey": api_key,
     })
     url = f"{BASE_URL}?{params}"
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        data = json.loads(r.read().decode())
+
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                data = json.loads(r.read().decode())
+            break
+        except Exception as e:
+            last_error = e
+            print(f"Aviso: fallo al pedir {interval} para {symbols} (intento {attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+    else:
+        print(f"Error: no se pudo obtener {interval} para {symbols} tras {retries} intentos ({last_error})")
+        return {}
 
     result = {}
     for symbol in symbols:

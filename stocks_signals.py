@@ -5,6 +5,7 @@ import json
 import time
 import urllib.request
 import urllib.parse
+from datetime import datetime, timezone
 
 BASE_URL = "https://api.twelvedata.com/time_series"
 
@@ -15,6 +16,31 @@ SYMBOLS = [
 
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
+
+STATE_FILE = "alerted_today.json"
+
+
+def load_state(path=STATE_FILE):
+    """Carga el estado de alertas ya enviadas hoy. Si la fecha guardada no
+    es la de hoy (UTC), se resetea automaticamente (nuevo dia = puede
+    volver a avisar)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if data.get("date") != today:
+        data = {"date": today, "sent": []}
+    return data
+
+
+def save_state(data, path=STATE_FILE):
+    with open(path, "w") as f:
+        json.dump(data, f)
 
 
 def chunk_list(items, size):
@@ -193,6 +219,9 @@ def fetch_all(symbols, interval, outputsize, call_counter, total_calls):
 
 
 def main():
+    state = load_state()
+    sent = set(state.get("sent", []))
+
     chunks = chunk_list(SYMBOLS, MAX_SYMBOLS_PER_CALL)
     total_calls = len(chunks) * 2  # una vez para diario, otra para semanal
     call_counter = [0]
@@ -224,26 +253,49 @@ def main():
             continue
 
         if label_daily:
-            msg = f"🔔{color_daily} {symbol} — {label_daily}\nRSI diario: {rsi_daily:.0f}"
-            print(msg)
-            send_telegram(msg)
+            key = f"{symbol}:rsi_daily"
+            if key not in sent:
+                msg = f"🔔{color_daily} {symbol} — {label_daily}\nRSI diario: {rsi_daily:.0f}"
+                print(msg)
+                send_telegram(msg)
+                sent.add(key)
+            else:
+                print(f"{symbol}: RSI diario en {label_daily} pero ya avisado hoy")
 
         if label_weekly:
-            msg = f"🔔{color_weekly} {symbol} — {label_weekly}\nRSI semanal: {rsi_weekly:.0f}"
-            print(msg)
-            send_telegram(msg)
+            key = f"{symbol}:rsi_weekly"
+            if key not in sent:
+                msg = f"🔔{color_weekly} {symbol} — {label_weekly}\nRSI semanal: {rsi_weekly:.0f}"
+                print(msg)
+                send_telegram(msg)
+                sent.add(key)
+            else:
+                print(f"{symbol}: RSI semanal en {label_weekly} pero ya avisado hoy")
 
         if div_daily:
-            color = "🟢" if div_daily == "alcista" else "🔴"
-            msg = f"🔔{color} {symbol} — divergencia {div_daily} (diario)"
-            print(msg)
-            send_telegram(msg)
+            key = f"{symbol}:div_daily"
+            if key not in sent:
+                color = "🟢" if div_daily == "alcista" else "🔴"
+                msg = f"🔔{color} {symbol} — divergencia {div_daily} (diario)"
+                print(msg)
+                send_telegram(msg)
+                sent.add(key)
+            else:
+                print(f"{symbol}: divergencia {div_daily} diaria pero ya avisado hoy")
 
         if div_weekly:
-            color = "🟢" if div_weekly == "alcista" else "🔴"
-            msg = f"🔔{color} {symbol} — divergencia {div_weekly} (semanal)"
-            print(msg)
-            send_telegram(msg)
+            key = f"{symbol}:div_weekly"
+            if key not in sent:
+                color = "🟢" if div_weekly == "alcista" else "🔴"
+                msg = f"🔔{color} {symbol} — divergencia {div_weekly} (semanal)"
+                print(msg)
+                send_telegram(msg)
+                sent.add(key)
+            else:
+                print(f"{symbol}: divergencia {div_weekly} semanal pero ya avisado hoy")
+
+    state["sent"] = sorted(sent)
+    save_state(state)
 
 
 if __name__ == "__main__":

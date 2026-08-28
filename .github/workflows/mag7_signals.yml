@@ -1,4 +1,4 @@
-name: Mag7 RSI Alert
+name: Stocks RSI Alert
 
 on:
   workflow_dispatch:

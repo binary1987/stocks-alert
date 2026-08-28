@@ -1,0 +1,35 @@
+name: DXY BTC Ratio Alert
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run dxy_btc_signals
+        env:
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN_MAG7: ${{ secrets.TELEGRAM_BOT_TOKEN_MAG7 }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python dxy_btc_signals.py
+
+      - name: Commit dxy_btc_alerted.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dxy_btc_alerted.json
+          git diff --staged --quiet || git commit -m "Actualizar estado de alertas DXY/BTC"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && break
+            sleep $((RANDOM % 5 + 1))
+          done

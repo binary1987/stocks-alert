@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# mag7_signals.py
+# stocks_signals.py
 import os
 import json
 import time
@@ -12,6 +12,11 @@ SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO"]
 
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
+
+
+def chunk_list(items, size):
+    """Trocea una lista en sublistas de maximo 'size' elementos."""
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 def get_batch(symbols, interval, outputsize):
@@ -165,15 +170,32 @@ def send_telegram(msg):
     urllib.request.urlopen(url, data=data, timeout=10)
 
 
+MAX_SYMBOLS_PER_CALL = 8  # limite de creditos/minuto de Twelve Data (plan gratuito)
+
+
+def fetch_all(symbols, interval, outputsize, call_counter, total_calls):
+    """
+    Pide los precios de 'symbols' troceando en grupos de MAX_SYMBOLS_PER_CALL,
+    con una pausa de 65s entre cada llamada a la API (salvo la ultima de
+    todas), para no superar el limite de creditos/minuto. Funciona igual de
+    bien con 8 simbolos (1 sola llamada) que con 20 (varias llamadas).
+    """
+    merged = {}
+    for chunk in chunk_list(symbols, MAX_SYMBOLS_PER_CALL):
+        merged.update(get_batch(chunk, interval, outputsize))
+        call_counter[0] += 1
+        if call_counter[0] < total_calls:
+            time.sleep(65)
+    return merged
+
+
 def main():
-    daily_data = get_batch(SYMBOLS, interval="1day", outputsize=365)
+    chunks = chunk_list(SYMBOLS, MAX_SYMBOLS_PER_CALL)
+    total_calls = len(chunks) * 2  # una vez para diario, otra para semanal
+    call_counter = [0]
 
-    # Pausa para no pasarnos del limite de 8 creditos/minuto de Twelve Data:
-    # el lote diario ya gasto creditos, esperamos a que "resetee" el minuto
-    # antes de pedir el lote semanal (otros creditos).
-    time.sleep(65)
-
-    weekly_data = get_batch(SYMBOLS, interval="1week", outputsize=260)
+    daily_data = fetch_all(SYMBOLS, "1day", 365, call_counter, total_calls)
+    weekly_data = fetch_all(SYMBOLS, "1week", 260, call_counter, total_calls)
 
     for symbol in SYMBOLS:
         daily_closes = daily_data.get(symbol)

@@ -238,7 +238,7 @@ def build_message(action_color, description):
     punto de girar al alza, BTC ya lo ha hecho muy bien frente al dolar y
     esta maduro para corregir -> POSIBLE VENTA.
     """
-    label = "POSIBLE COMPRA BTC" if action_color == "🟢" else "POSIBLE VENTA BTC"
+    label = "POSIBLE SEÑAL DE COMPRA BTC" if action_color == "🟢" else "POSIBLE SEÑAL DE VENTA BTC"
     return f"{action_color} {label}\nDXY / BTCUSD\n{description}"
 
 

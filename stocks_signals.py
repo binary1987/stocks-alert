@@ -21,9 +21,14 @@ STATE_FILE = "alerted_today.json"
 
 
 def load_state(path=STATE_FILE):
-    """Carga el estado de alertas ya enviadas hoy. Si la fecha guardada no
-    es la de hoy (UTC), se resetea automaticamente (nuevo dia = puede
-    volver a avisar)."""
+    """
+    Carga el estado de alertas. Tiene dos partes con vida distinta:
+    - "sent": alertas de RSI en zona extrema, se resetea cada dia (UTC).
+    - "div_state": ultimo precio del extremo que disparo cada divergencia,
+      NO se resetea por fecha, solo cambia cuando aparece un pico/valle
+      nuevo de verdad (asi no se repite el aviso mientras sea "la misma"
+      divergencia, ni siquiera al dia siguiente).
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if os.path.exists(path):
         try:
@@ -33,14 +38,33 @@ def load_state(path=STATE_FILE):
             data = {}
     else:
         data = {}
+
     if data.get("date") != today:
-        data = {"date": today, "sent": []}
+        data["date"] = today
+        data["sent"] = []
+
+    data.setdefault("sent", [])
+    data.setdefault("div_state", {})
     return data
 
 
 def save_state(data, path=STATE_FILE):
     with open(path, "w") as f:
         json.dump(data, f)
+
+
+def divergence_key_changed(state, key, price, tolerance=1e-6):
+    """
+    Compara el precio del extremo actual con el ultimo guardado para esa
+    clave. Devuelve True si es una divergencia "nueva" (primera vez, o el
+    extremo ha cambiado de verdad), False si sigue siendo la misma.
+    """
+    last_price = state["div_state"].get(key)
+    if last_price is None:
+        return True
+    if last_price == 0:
+        return price != 0
+    return abs(price - last_price) / abs(last_price) > tolerance
 
 
 def chunk_list(items, size):
@@ -149,34 +173,41 @@ def find_extrema(values, order, min_distance):
 
 
 def detect_divergence(closes, order=3, min_distance=5, rsi_period=14):
-    """Misma logica que en report.py / alt_signals.py: compara los 2
-    ultimos picos/valles de precio contra los de RSI."""
+    """Compara los 2 ultimos picos/valles de precio contra los de RSI para
+    detectar divergencia. Devuelve (direccion, precio_del_extremo) o
+    (None, None). El precio_del_extremo identifica el pico/valle concreto
+    que genera la señal, para poder distinguir una divergencia "nueva" de
+    una que sigue activa por el mismo punto de siempre."""
     rsi_series = compute_rsi_series(closes, period=rsi_period)
     if len(rsi_series) < order * 2 + min_distance + 2:
-        return None
+        return None, None
 
     aligned_closes = closes[-len(rsi_series):]
     peaks, troughs = find_extrema(aligned_closes, order, min_distance)
 
     bearish = False
+    bearish_price = None
     if len(peaks) >= 2:
         i1, i2 = peaks[-2], peaks[-1]
         if aligned_closes[i2] > aligned_closes[i1] and rsi_series[i2] < rsi_series[i1]:
             bearish = True
+            bearish_price = aligned_closes[i2]
 
     bullish = False
+    bullish_price = None
     if len(troughs) >= 2:
         i1, i2 = troughs[-2], troughs[-1]
         if aligned_closes[i2] < aligned_closes[i1] and rsi_series[i2] > rsi_series[i1]:
             bullish = True
+            bullish_price = aligned_closes[i2]
 
     if bearish and bullish:
-        return None
+        return None, None  # señales mixtas, no alertamos para evitar ruido
     if bearish:
-        return "bajista"
+        return "bajista", bearish_price
     if bullish:
-        return "alcista"
-    return None
+        return "alcista", bullish_price
+    return None, None
 
 
 def zone_info(rsi):
@@ -243,8 +274,8 @@ def main():
         label_daily, color_daily = zone_info(rsi_daily)
         label_weekly, color_weekly = zone_info(rsi_weekly)
 
-        div_daily = detect_divergence(daily_closes, order=3, min_distance=5) if daily_closes else None
-        div_weekly = detect_divergence(weekly_closes, order=2, min_distance=3) if weekly_closes else None
+        div_daily, div_daily_price = detect_divergence(daily_closes, order=3, min_distance=5) if daily_closes else (None, None)
+        div_weekly, div_weekly_price = detect_divergence(weekly_closes, order=2, min_distance=3) if weekly_closes else (None, None)
 
         if label_daily is None and label_weekly is None and div_daily is None and div_weekly is None:
             rd = f"{rsi_daily:.0f}" if rsi_daily is not None else "N/A"
@@ -272,27 +303,31 @@ def main():
             else:
                 print(f"{symbol}: RSI semanal en {label_weekly} pero ya avisado hoy")
 
+        div_daily_key = f"{symbol}:div_daily"
         if div_daily:
-            key = f"{symbol}:div_daily"
-            if key not in sent:
+            if divergence_key_changed(state, div_daily_key, div_daily_price):
                 color = "🟢" if div_daily == "alcista" else "🔴"
                 msg = f"🔔{color} {symbol} — divergencia {div_daily} (diario)"
                 print(msg)
                 send_telegram(msg)
-                sent.add(key)
+                state["div_state"][div_daily_key] = div_daily_price
             else:
-                print(f"{symbol}: divergencia {div_daily} diaria pero ya avisado hoy")
+                print(f"{symbol}: divergencia {div_daily} diaria, mismo extremo ya avisado")
+        elif div_daily_key in state["div_state"]:
+            del state["div_state"][div_daily_key]
 
+        div_weekly_key = f"{symbol}:div_weekly"
         if div_weekly:
-            key = f"{symbol}:div_weekly"
-            if key not in sent:
+            if divergence_key_changed(state, div_weekly_key, div_weekly_price):
                 color = "🟢" if div_weekly == "alcista" else "🔴"
                 msg = f"🔔{color} {symbol} — divergencia {div_weekly} (semanal)"
                 print(msg)
                 send_telegram(msg)
-                sent.add(key)
+                state["div_state"][div_weekly_key] = div_weekly_price
             else:
-                print(f"{symbol}: divergencia {div_weekly} semanal pero ya avisado hoy")
+                print(f"{symbol}: divergencia {div_weekly} semanal, mismo extremo ya avisado")
+        elif div_weekly_key in state["div_state"]:
+            del state["div_state"][div_weekly_key]
 
     state["sent"] = sorted(sent)
     save_state(state)

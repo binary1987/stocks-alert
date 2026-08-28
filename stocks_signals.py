@@ -8,7 +8,10 @@ import urllib.parse
 
 BASE_URL = "https://api.twelvedata.com/time_series"
 
-SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO"]
+SYMBOLS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO",
+    "MSTR", "BMNR", "ORCL", "LLY", "COIN", "CRCL",
+]
 
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30

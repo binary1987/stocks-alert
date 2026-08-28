@@ -38,14 +38,6 @@ STATE_FILE = "alerted_today.json"
 
 
 def load_state(path=STATE_FILE):
-    """
-    Carga el estado de alertas. Tiene dos partes con vida distinta:
-    - "sent": alertas de RSI en zona extrema, se resetea cada dia (UTC).
-    - "div_state": ultimo precio del extremo que disparo cada divergencia,
-      NO se resetea por fecha, solo cambia cuando aparece un pico/valle
-      nuevo de verdad (asi no se repite el aviso mientras sea "la misma"
-      divergencia, ni siquiera al dia siguiente).
-    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if os.path.exists(path):
         try:
@@ -71,11 +63,6 @@ def save_state(data, path=STATE_FILE):
 
 
 def divergence_key_changed(state, key, price, tolerance=1e-6):
-    """
-    Compara el precio del extremo actual con el ultimo guardado para esa
-    clave. Devuelve True si es una divergencia "nueva" (primera vez, o el
-    extremo ha cambiado de verdad), False si sigue siendo la misma.
-    """
     last_price = state["div_state"].get(key)
     if last_price is None:
         return True
@@ -85,20 +72,10 @@ def divergence_key_changed(state, key, price, tolerance=1e-6):
 
 
 def chunk_list(items, size):
-    """Trocea una lista en sublistas de maximo 'size' elementos."""
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 def get_batch(symbols, interval, outputsize, retries=3, retry_delay=10):
-    """
-    Pide precios de varios simbolos a la vez (batch). Ojo: en Twelve Data
-    cada simbolo consume 1 credito, un batch de 7 simbolos = 7 creditos,
-    no 1. Devuelve un dict {symbol: [closes_ascendente]}.
-
-    Reintenta automaticamente ante fallos de red/timeout (hasta 'retries'
-    veces, con 'retry_delay' segundos de espera entre intentos), ya que
-    Twelve Data puede tener timeouts puntuales sin que sea un problema real.
-    """
     api_key = os.environ.get("TWELVEDATA_API_KEY")
     params = urllib.parse.urlencode({
         "symbol": ",".join(symbols),
@@ -207,11 +184,6 @@ def find_extrema(values, order, min_distance):
 
 
 def detect_divergence(closes, order=3, min_distance=5, rsi_period=14):
-    """Compara los 2 ultimos picos/valles de precio contra los de RSI para
-    detectar divergencia. Devuelve (direccion, precio_del_extremo) o
-    (None, None). El precio_del_extremo identifica el pico/valle concreto
-    que genera la señal, para poder distinguir una divergencia "nueva" de
-    una que sigue activa por el mismo punto de siempre."""
     rsi_series = compute_rsi_series(closes, period=rsi_period)
     if len(rsi_series) < order * 2 + min_distance + 2:
         return None, None
@@ -236,7 +208,7 @@ def detect_divergence(closes, order=3, min_distance=5, rsi_period=14):
             bullish_price = aligned_closes[i2]
 
     if bearish and bullish:
-        return None, None  # señales mixtas, no alertamos para evitar ruido
+        return None, None
     if bearish:
         return "bajista", bearish_price
     if bullish:
@@ -265,22 +237,15 @@ def send_telegram(msg):
 
 
 def build_signal_message(color, symbol, description):
-    """Formato profesional: SEÑAL DE COMPRA/VENTA + nombre completo + ticker."""
-    label = "SEÑAL DE COMPRA" if color == "🟢" else "SEÑAL DE VENTA"
+    label = "POSIBLE SEÑAL DE COMPRA" if color == "🟢" else "POSIBLE SEÑAL DE VENTA"
     name = SYMBOL_NAMES.get(symbol, symbol)
     return f"{color} {label}\n{name} ({symbol})\n{description}"
 
 
-MAX_SYMBOLS_PER_CALL = 8  # limite de creditos/minuto de Twelve Data (plan gratuito)
+MAX_SYMBOLS_PER_CALL = 8
 
 
 def fetch_all(symbols, interval, outputsize, call_counter, total_calls):
-    """
-    Pide los precios de 'symbols' troceando en grupos de MAX_SYMBOLS_PER_CALL,
-    con una pausa de 65s entre cada llamada a la API (salvo la ultima de
-    todas), para no superar el limite de creditos/minuto. Funciona igual de
-    bien con 8 simbolos (1 sola llamada) que con 20 (varias llamadas).
-    """
     merged = {}
     for chunk in chunk_list(symbols, MAX_SYMBOLS_PER_CALL):
         merged.update(get_batch(chunk, interval, outputsize))
@@ -295,7 +260,7 @@ def main():
     sent = set(state.get("sent", []))
 
     chunks = chunk_list(SYMBOLS, MAX_SYMBOLS_PER_CALL)
-    total_calls = len(chunks) * 2  # una vez para diario, otra para semanal
+    total_calls = len(chunks) * 2
     call_counter = [0]
 
     daily_data = fetch_all(SYMBOLS, "1day", 365, call_counter, total_calls)

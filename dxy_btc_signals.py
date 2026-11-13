@@ -3,6 +3,7 @@
 import os
 import json
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -261,14 +262,36 @@ def divergence_key_changed(state, key, price, tolerance=1e-6):
     return abs(price - last_price) / abs(last_price) > tolerance
 
 
-def send_telegram(msg):
+def send_telegram(msg, retries=3):
+    """
+    Envia el mensaje a Telegram con reintentos. Un fallo puntual de red
+    (timeout, 5xx, 429) ya no tumba el job a la primera: se reintenta con una
+    pausa creciente. Un error permanente (token o chat_id mal, mensaje mal
+    formado) no se reintenta porque fallaria igual. Si tras los reintentos
+    sigue fallando, se lanza la excepcion como antes.
+    """
     token = os.environ.get("TELEGRAM_BOT_TOKEN_MAG7")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = urllib.parse.urlencode({"chat_id": chat_id, "text": msg}).encode()
-    urllib.request.urlopen(url, data=data, timeout=10)
+
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            urllib.request.urlopen(url, data=data, timeout=20)
+            return
+        except urllib.error.HTTPError as e:
+            if e.code != 429 and e.code < 500:
+                raise
+            last_error = e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last_error = e
+        print(f"Aviso: fallo al enviar a Telegram (intento {attempt}/{retries}): {last_error}")
+        if attempt < retries:
+            time.sleep(3 * attempt)
+    raise last_error
 
 
 def build_message(action_color, description):
